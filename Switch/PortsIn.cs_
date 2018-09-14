@@ -1,0 +1,174 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using Configuration;
+using System.Collections.Concurrent;
+using Network;
+using Configuration;
+
+namespace Switch
+{
+    /* Odpowiada za odbieranie danych z połączenia z chmurą */
+    public class PortsIn
+    {
+        private int nodeNumber; // numer wezla, do ktorego to nalezy
+
+        private Socket cloudSocket; // gniazdo, z którym jest połączony węzeł
+
+        private Port[] ports; // wirtualne porty ATM wejściowe
+
+        private byte[] byteData = new byte[StaticInfo.CBUFFER]; // bufor danych odbieranych z Socketa
+
+        public ConcurrentQueue<TCPCell> buffer; // bufor komórek odebranych
+
+        private Log myLog; // tutaj dodaje wszystkie logi
+
+        private Matrix Matrix;
+
+        public PortsIn(Matrix matrix, Log log, int nodeNumber, List<int> portIDs)  
+        {
+            this.Matrix = matrix;
+            this.myLog = log;
+            this.nodeNumber = nodeNumber;
+
+            ports = new Port[portIDs.Count];
+            for (int i = 0; i < ports.Length; i++)
+                ports[i] = new Port(portIDs.ElementAt(i));
+
+            buffer = new ConcurrentQueue<TCPCell>();
+            myLog.Queue.Enqueue("PortsIn is working");
+        }
+
+        ~PortsIn()
+        {
+            if (cloudSocket != null) cloudSocket.Close();
+        }
+
+        /* Połącz z chmurą */
+        public void Connect(IPEndPoint cloud)
+        {
+            try
+            {
+                cloudSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                cloudSocket.BeginConnect(cloud, new AsyncCallback(OnConnect), cloudSocket);
+
+                if (cloudSocket.Connected)
+                {
+                    foreach (Port port in ports) // ustaw porty jako połączone i otwarte
+                        port.Connected = true;
+                }
+
+                cloudSocket.BeginReceive(byteData, 0, byteData.Length, SocketFlags.None, new AsyncCallback(OnReceive), null);
+            }
+                
+            catch (Exception e) { myLog.Queue.Enqueue("Connect() / Receiver() error: {0}" + e.ToString()); }
+        }
+
+        private void OnConnect(IAsyncResult ar)
+        {
+            try
+            {
+                cloudSocket.EndConnect(ar);
+                myLog.Queue.Enqueue("Connected to cloud");
+
+                /* przedstaw się chmurze*/
+                cloudSocket.BeginSend(BitConverter.GetBytes(nodeNumber), 0, BitConverter.GetBytes(nodeNumber).Length, SocketFlags.None, new AsyncCallback(Present), null);
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("OnConnect() error: {0}" + e.ToString());  }
+        }
+
+        /* Przedstawiamy się chmurze, którym jesteśmy węzłem */
+        private void Present(IAsyncResult ar)
+        {
+            try
+            {
+                int bytesSent = cloudSocket.EndSend(ar);  // Complete sending the data to the remote device.
+                myLog.Queue.Enqueue("Presenting PortsIn finished");
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("Send error: {0}" + e.ToString()); }
+        }
+
+        /* metoda callback do odbioru danych */
+        private void OnReceive(IAsyncResult ar)
+        {
+            try
+            {
+                int bytesRead = cloudSocket.EndReceive(ar);
+                //myLog.logs.Enqueue("Data received");
+
+                /* TCPcell.port zawiera port wejsciowy tego wezla, zeby bylo wiadomo gdzie to wchodzi na port ATM tego wezla */
+                //List<byte[]> tcpCells = getTCPCell(byteData);
+                byte[] tcpCellBytes = byteData;
+                //foreach (byte[] tcpCell in tcpCells)
+                {
+                    TCPCell newTCPCell = new TCPCell();
+                    newTCPCell.ToTCPCell(tcpCellBytes);
+                    buffer.Enqueue(newTCPCell);
+                    myLog.Queue.Enqueue("GET recv (port=" + newTCPCell.portID.ToString() + "): " + Encoding.UTF8.GetString(newTCPCell.cell.Data));
+
+                    while(!buffer.IsEmpty)
+                    {
+                        TCPCell tcpCelltemp = new TCPCell();
+                        buffer.TryDequeue(out tcpCelltemp);
+
+                        Matrix.Commutation(tcpCelltemp.cell, tcpCelltemp.portID);
+                    }
+                }
+    
+                byteData = new byte[StaticInfo.CBUFFER]; // czyścimy bufor danych wejściowych
+                cloudSocket.BeginReceive(byteData, 0, byteData.Length, SocketFlags.None, new AsyncCallback(OnReceive), null);
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("OnReceive() error: " + e.ToString());  }
+        }
+
+        /* Funkcja pomocnicza, gdyby podczas wysyłania nam scaliło nasze bajty różnych komórek */
+        public List<byte[]> getTCPCell(byte[] bytes)
+        {
+            List<byte[]> splitted = new List<byte[]>();
+            int lengthToSplit = 48;
+
+            int arrayLength = bytes.Length;
+
+            for (int i = 0; i < arrayLength; i = i + lengthToSplit)
+            {
+                byte[] val = new byte[lengthToSplit];
+
+                if (arrayLength < i + lengthToSplit)
+                {
+                    lengthToSplit = arrayLength - i;
+                }
+
+                Array.Copy(bytes, i, val, 0, lengthToSplit);
+                splitted.Add(val);
+
+            }
+            return splitted;
+        }
+
+
+        class Port
+        {
+            int portID;
+            public int PortID { get { return portID; } set { portID = value; } }
+
+            /* info, czy jest dzialajacy */
+            /*
+            private bool open = true;
+            public bool Open { get { return open; } }
+            */
+
+            /* info, czy jest polaczony z chmura */
+            private bool connected = false;
+            public bool Connected { get { return connected; } set { connected = value; } }
+
+            public Port(int id)
+            {
+                portID = id;
+            }
+        }
+    }
+}

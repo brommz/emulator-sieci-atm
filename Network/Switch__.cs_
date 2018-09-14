@@ -1,0 +1,92 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Net;
+
+namespace Network
+{
+    /*
+     * ATM Switch
+     */
+    public class Switch__
+    {
+        private int id;
+        public int Id { get { return id; } }
+
+        private string name;
+        public string Name { get { return name; } set { name = value; } }
+
+        public Log myLog; // logi zbierane z portów od switcha
+
+        //private SwitchAgent agent; // agent do węzła switch
+        //public SwitchAgent Agent { get { return agent; } }
+
+        private PortsIn portsIn; //porty wejściowe switcha
+        public PortsIn PortsIn { get { return portsIn; } }
+
+        private PortsOut portsOut; //porty wyjściowe switcha
+        public PortsOut PortsOut { get { return portsOut; } }
+
+        private Matrix matrix; // pole komutacyjne
+        public Matrix Matrix { get { return matrix; } }
+
+        private Thread MATRIX;
+
+        public Switch__(Configuration.NetworkElement networkElement)
+        {
+            id = networkElement.Info.ID;
+            name = networkElement.Info.Name; // TODO: Czemu to nie działa?
+            myLog = new Log();
+
+            List<Configuration.PortInput> inputPorts = networkElement.PortsIn;
+            List<int> inputPortsIds = new List<int>();
+            foreach (Configuration.PortInput port in inputPorts)
+                inputPortsIds.Add(port.Id);
+            portsIn = new PortsIn(myLog, id, inputPortsIds);
+
+            List<Configuration.PortOutput> outputPorts = networkElement.PortsOut;
+            List<int> outputPortsIds = new List<int>();
+            foreach (Configuration.PortOutput port in outputPorts)
+                outputPortsIds.Add(port.Id);
+            portsOut = new PortsOut(myLog, id, outputPortsIds);
+
+            matrix = new Matrix(networkElement);
+        }
+
+        ~Switch__()
+        {
+            if(MATRIX != null) MATRIX.Abort();
+        }
+
+        public void StartWorking(string cloudHost, int cloudPort1, int cloudPort2)
+        {
+            IPEndPoint point1 = new IPEndPoint(IPAddress.Parse(cloudHost), cloudPort1);
+            IPEndPoint point2 = new IPEndPoint(IPAddress.Parse(cloudHost), cloudPort2);
+            
+            portsIn.Connect(point1);
+            portsOut.Connect(point2);
+
+            Thread MATRIX = new Thread(new ThreadStart(Commutation));
+            MATRIX.Start();
+        }
+
+        /* Wątek działania komutatora */
+        private void Commutation()
+        {
+            while (true)
+            {
+                if(!portsIn.buffer.IsEmpty) 
+                {
+                    TCPCell tcpCell = new TCPCell();
+                    portsIn.buffer.TryDequeue(out tcpCell);
+
+                    matrix.Commutation(tcpCell.cell, tcpCell.portID);
+                }
+                // Thread.Sleep(50); // tak, żeby się nie przemęczał może?
+            }
+        }
+    }
+}

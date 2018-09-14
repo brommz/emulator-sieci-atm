@@ -1,0 +1,137 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using Network;
+
+namespace Switch
+{
+    /* Odpowiada za wysyłanie komórek do chmury */
+    public class PortsOut
+    {
+        private int nodeNumber; // numer wezla, do ktorego to nalezy
+
+        private Socket cloudSocket; // gniazdo, z którym jest połączony węzeł
+
+        private Port[] ports; // wirtualne porty ATM
+
+        private Log myLog; // tutaj dodaje wszystkie logi
+
+        public PortsOut(Log log, int nodeNumber, List<int> portIDs)  
+        {
+            this.myLog = log;
+            this.nodeNumber = nodeNumber;
+            ports = new Port[portIDs.Count];
+            for (int i = 0; i < ports.Length; i++)
+                ports[i] = new Port(portIDs.ElementAt(i));
+            myLog.Queue.Enqueue("PortsOut is working");
+        }
+
+        /* Połącz z chmurą */
+        public void Connect(IPEndPoint cloud)
+        {
+            myLog.Queue.Enqueue("Connect()");
+            try
+            {
+                cloudSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                cloudSocket.BeginConnect(cloud, new AsyncCallback(OnConnect), null);
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("Connection problem"); }
+        }
+
+        private void OnConnect(IAsyncResult ar)
+        {
+            myLog.Queue.Enqueue("OnConnect()");
+            try
+            {
+                cloudSocket.EndConnect(ar);
+
+                foreach (Port port in ports) // ustaw porty jako połączone
+                    port.Connected = true;
+                
+                myLog.Queue.Enqueue("Connected to cloud, ID=" + nodeNumber);
+
+                /* przedstaw się chmurze, którym węzłem jesteś*/
+                cloudSocket.BeginSend(BitConverter.GetBytes(nodeNumber), 0, BitConverter.GetBytes(nodeNumber).Length, SocketFlags.None, new AsyncCallback(Present), null);
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("Connection problem"); }
+        }
+
+        /* Przedstawiamy się chmurze, którym jesteśmy węzłem */
+        private void Present(IAsyncResult ar)
+        {
+            myLog.Queue.Enqueue("Present()");
+            try
+            {
+                cloudSocket.EndSend(ar);  // Complete sending the data to the remote device.
+                myLog.Queue.Enqueue("Presenting PortsOut finished");
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("Send error: {0}" + e.ToString()); }
+
+            //Send(11, new Cell());
+            myLog.Queue.Enqueue("End Present()");
+        }
+
+        /* Wyślij z portu wyjściowego ATM daną komórkę*/
+        public void Send(int port, Cell cell) // port ATM, który ma zostać wykorzystany jako wyjściowy
+        {
+            myLog.Queue.Enqueue("Send()");
+            TCPCell tcp = new TCPCell(nodeNumber, port, cell);
+            byte[] data = tcp.ToByte();
+
+            /*bool connected = false;
+            foreach (Port Port in ports) 
+            {
+                if (Port.PortID == port) connected = Port.Connected;
+            }*/
+            //if (connected)
+            {
+                try 
+                {
+                    myLog.Queue.Enqueue("Sending started");
+                    cloudSocket.BeginSend(data, 0, data.Length, SocketFlags.None, new AsyncCallback(OnSend), null);
+                }
+                catch (SocketException) 
+                {
+                    //ports[port].Connected = false;
+                    Console.Error.WriteLine("Send problem");
+                }
+            }
+        }
+
+        private void OnSend(IAsyncResult ar)
+        {
+            try
+            {
+                int bytesSent = cloudSocket.EndSend(ar);  // Complete sending the data to the remote device.
+                myLog.Queue.Enqueue("Sending finished");
+            }
+            catch (Exception e) { myLog.Queue.Enqueue("Send error: {0}" + e.ToString());  }
+        }
+
+        class Port
+        {
+            int portID;
+            public int PortID { get { return portID; } set { portID = value; } }
+            
+            /* info, czy jest dzialajacy */
+            /*
+            private bool open = true;
+            public bool Open { get { return open; } }
+            */
+            
+            /* info, czy jest polaczony z chmura */
+
+            private bool connected = false;
+            public bool Connected { get { return connected; } set { connected = value; } }
+
+            public Port(int id)
+            {
+                portID = id;
+            }
+        }
+    }
+}

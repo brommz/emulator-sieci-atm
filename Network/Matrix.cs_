@@ -1,0 +1,51 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Network
+{
+
+    /*
+     * Pole komutacyjne -> przetwarzanie komórki 
+     * i nadanie na odpowiedni port wyjściowy na podstawie tablicy routingu
+     */
+
+    public class Matrix
+    {
+        private MappingTable mappingTable = new MappingTable();
+        public MappingTable Table { get { return mappingTable; } set { mappingTable = value; } }
+
+        private Switch switchElement;
+
+        public Matrix(Configuration.NetworkElement networkElement)
+        {
+            foreach(Configuration.RoutingEntry entry in networkElement.RoutingTable) 
+                mappingTable.Add(new HalfEntry(entry.PortIn, entry.VpiIN, entry.VciIN), new HalfEntry(entry.PortOut, entry.VpiOUT, entry.VciOUT));
+        }
+
+        /* Komutacja - nagłówek komórki jest wyjmowany i na podstawie wpisu z tablicy routingu komórka jest przekazywana na port wyj*/
+        /* port wej ---> komutator ---> port wyjściowy */
+        public void Commutation(Cell cell, int portIn) // port wej z ktorego przyszla komorka, VPI, VCI w komorce
+        {
+            HalfEntry source = new HalfEntry(portIn, cell.VPI, cell.VCI); // dekapsuluje port, vpi, vci z komorki ATM
+
+            if (mappingTable.ContainsKey(source))
+            {
+                HalfEntry target = mappingTable[source]; // znalezienie w tablicy wezla docelowego
+                
+                /* Mapowanie VPI, VCI lub tylko VPI */
+                cell.VPI = target.VPI;
+                if (target.VCI > 0) cell.VCI = target.VCI;
+                int portOut = target.Port;
+
+                switchElement.PortsOut.Send(portOut, cell); // wysłanie komórki na dany port
+            }
+        }
+
+
+
+    }
+
+}
